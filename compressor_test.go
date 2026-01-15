@@ -79,3 +79,59 @@ func TestCompressSkipsUnexported(t *testing.T) {
 		t.Fatalf("Marshaled data is invalid, got: %s", raw)
 	}
 }
+
+func TestCompressTagFilteringAndPointers(t *testing.T) {
+	type Inner struct {
+		C int `json:"c"`
+	}
+	type S struct {
+		A *int   `json:",omitempty"`
+		B string `json:"-"`
+		C Inner  `json:"c"`
+	}
+	value := 10
+	data := S{A: &value, B: "skip", C: Inner{C: 30}}
+	raw, err := Marshal(data)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	target := `[10,[30]]`
+	if string(raw) != target {
+		t.Fatalf("Marshaled data is invalid, got: %s", raw)
+	}
+
+	dataNil := S{A: nil, B: "skip", C: Inner{C: 30}}
+	raw, err = Marshal(dataNil)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	target = `[null,[30]]`
+	if string(raw) != target {
+		t.Fatalf("Marshaled data is invalid, got: %s", raw)
+	}
+}
+
+func TestCompressStructWithoutTags(t *testing.T) {
+	type S struct {
+		A int
+		B string
+	}
+	raw, err := Marshal(S{A: 1, B: "ignored"})
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(raw) != `[]` {
+		t.Fatalf("expected empty array, got: %s", raw)
+	}
+}
+
+func TestCompressMap(t *testing.T) {
+	data := map[string]int{"b": 2, "a": 1}
+	raw, err := Marshal(data)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(raw) != `{"a":1,"b":2}` {
+		t.Fatalf("unexpected map output: %s", raw)
+	}
+}

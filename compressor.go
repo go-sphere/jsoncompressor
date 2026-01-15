@@ -2,6 +2,7 @@ package jsoncompressor
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 )
 
@@ -31,12 +32,40 @@ func compressStruct(val reflect.Value) ([]any, error) {
 }
 
 func compressValue(v reflect.Value) (any, error) {
-	switch v.Kind() {
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return nil, nil
+		}
+		v = v.Elem()
+	}
+	kind := v.Kind()
+	switch kind {
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer, reflect.Uintptr:
+		return nil, fmt.Errorf("unsupported kind: %s", kind)
+	case reflect.Map:
+		if v.IsNil() {
+			return nil, nil
+		}
+		if v.Type().Key().Kind() != reflect.String {
+			return nil, fmt.Errorf("unsupported map key type: %s", v.Type().Key())
+		}
+		result := make(map[string]any, v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			key := iter.Key().String()
+			value, err := compressValue(iter.Value())
+			if err != nil {
+				return nil, err
+			}
+			result[key] = value
+		}
+		return result, nil
 	case reflect.Struct:
 		return compressStruct(v)
 	case reflect.Slice, reflect.Array:
-		result := make([]any, v.Len())
-		for i := 0; i < v.Len(); i++ {
+		length := v.Len()
+		result := make([]any, length)
+		for i := 0; i < length; i++ {
 			val, err := compressValue(v.Index(i))
 			if err != nil {
 				return nil, err
@@ -44,11 +73,6 @@ func compressValue(v reflect.Value) (any, error) {
 			result[i] = val
 		}
 		return result, nil
-	case reflect.Pointer:
-		if v.IsNil() {
-			return nil, nil
-		}
-		return compressValue(v.Elem())
 	default:
 		return v.Interface(), nil
 	}

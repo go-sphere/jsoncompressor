@@ -13,7 +13,7 @@ JsonCompressor is a lightweight Go library that compresses JSON structures into 
 ## Installation
 
 ```bash
-go get github.com/TBXark/jsoncompressor
+go get github.com/go-sphere/jsoncompressor
 ```
 
 ## Usage
