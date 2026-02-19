@@ -32,7 +32,7 @@ func getStructMeta(t reflect.Type) *structMeta {
 	// Build metadata
 	num := t.NumField()
 	fields := make([]fieldMeta, 0, num)
-	for i := 0; i < num; i++ {
+	for i := range num {
 		ft := t.Field(i)
 		name, ok := getJsonKey(&ft)
 		if !ok {

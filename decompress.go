@@ -100,7 +100,7 @@ func decodeIntoValue(data any, field reflect.Value) error {
 			return fmt.Errorf("expected array for slice field")
 		}
 		slice := reflect.MakeSlice(field.Type(), len(dataSlice), len(dataSlice))
-		for i := 0; i < len(dataSlice); i++ {
+		for i := range dataSlice {
 			if err := decodeIntoValue(dataSlice[i], slice.Index(i)); err != nil {
 				return err
 			}
@@ -117,7 +117,7 @@ func decodeIntoValue(data any, field reflect.Value) error {
 		if len(dataSlice) != field.Len() {
 			return fmt.Errorf("array length mismatch: have %d values, want %d", len(dataSlice), field.Len())
 		}
-		for i := 0; i < len(dataSlice); i++ {
+		for i := range dataSlice {
 			if err := decodeIntoValue(dataSlice[i], field.Index(i)); err != nil {
 				return err
 			}

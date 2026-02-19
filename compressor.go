@@ -65,7 +65,7 @@ func compressValue(v reflect.Value) (any, error) {
 	case reflect.Slice, reflect.Array:
 		length := v.Len()
 		result := make([]any, length)
-		for i := 0; i < length; i++ {
+		for i := range length {
 			val, err := compressValue(v.Index(i))
 			if err != nil {
 				return nil, err
