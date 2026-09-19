@@ -6,7 +6,7 @@ JsonCompressor is a lightweight Go library that compresses JSON structures into 
 
 - Compress any struct with JSON tags into an array format
 - Decompress arrays back into their original struct format
-- Recursive handling of nested structures and arrays
+- Recursive handling of nested structures, pointers, slices/arrays and string-keyed maps
 - Preserves field order based on struct definition
 - Type-safe conversion
 
@@ -58,9 +58,22 @@ if err != nil {
 }
 ```
 
+## Supported types
+
+| Go type | Compressed form |
+| --- | --- |
+| struct | Array of its field values |
+| pointer | The pointed-to value's form, or `null` when nil |
+| slice / array | Array |
+| map with string keys | Object |
+| scalars / `interface{}` | Value as-is |
+
+Channels, functions, `unsafe.Pointer`, `uintptr` and maps with non-string keys are
+unsupported: `Marshal` returns an error when it meets one.
+
 ## Notes
 
-- Only processes fields with JSON tags
+- Only exported fields with a non-empty `json` tag take part; untagged fields and fields tagged `json:"-"` are skipped
 - Field order must be consistent between compression and decompression
 - Requires proper type matching for successful decompression
 
