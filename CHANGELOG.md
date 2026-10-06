@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-A silent data-corruption fix. Payloads written by earlier versions still
+Two silent data-corruption fixes. Payloads written by earlier versions still
 decode: the compressed wire format for numbers is unchanged.
 
 ### Fixes
@@ -20,6 +20,19 @@ an error instead of a wrong value.
 Values stored into `interface{}` fields are unchanged: numbers there are
 still `float64`, as with `encoding/json`.
 
+**`json.Marshaler` / `json.Unmarshaler` are honoured**
+
+Struct values were always expanded field by field, so types that own their
+JSON form were bypassed. `time.Time`, whose fields are all unexported, was
+compressed to `[]` and decoded to the zero time without an error. Types
+implementing `json.Marshaler` are now encoded with `MarshalJSON`, and types
+whose pointer implements `json.Unmarshaler` are decoded with `UnmarshalJSON`,
+following `encoding/json`'s rules for pointer receivers.
+
 ### Behaviour changes
 
+- The compressed output of types implementing `json.Marshaler` changes: a
+  `time.Time` field is now its RFC 3339 string instead of `[]`. Payloads
+  holding the old `[]` form for such a field now fail to decode rather than
+  silently yielding a zero value.
 - Trailing data after the top-level JSON value is still rejected, as before.

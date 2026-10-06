@@ -38,6 +38,15 @@ func compressValue(v reflect.Value) (any, error) {
 		}
 		v = v.Elem()
 	}
+	if m, ok := asMarshaler(v); ok {
+		// Types such as time.Time own their JSON form; their fields are
+		// usually unexported, so walking them would silently produce [].
+		raw, err := m.MarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		return json.RawMessage(raw), nil
+	}
 	kind := v.Kind()
 	switch kind {
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer, reflect.Uintptr:
@@ -76,4 +85,19 @@ func compressValue(v reflect.Value) (any, error) {
 	default:
 		return v.Interface(), nil
 	}
+}
+
+// asMarshaler returns v as a json.Marshaler when its type, or its pointer type
+// for addressable values, implements the interface, matching encoding/json.
+func asMarshaler(v reflect.Value) (json.Marshaler, bool) {
+	if !v.IsValid() || v.Kind() == reflect.Interface || !implementsMarshaler(v.Type()) {
+		return nil, false
+	}
+	if v.Type().Implements(marshalerType) {
+		return v.Interface().(json.Marshaler), true
+	}
+	if v.CanAddr() {
+		return v.Addr().Interface().(json.Marshaler), true
+	}
+	return nil, false
 }

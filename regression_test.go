@@ -1,7 +1,9 @@
 package jsoncompressor
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,12 +36,10 @@ func TestRoundTripLargeIntegers(t *testing.T) {
 	}
 }
 
-// compressValue walks struct fields by reflection and never consults
-// json.Marshaler, so time.Time (all fields unexported) is compressed to []
-// and decodes to the zero time without an error.
+// compressValue used to walk struct fields by reflection without consulting
+// json.Marshaler, so time.Time (all fields unexported) was compressed to []
+// and decoded to the zero time without an error.
 func TestRoundTripTime(t *testing.T) {
-	t.Skip("known bug: json.Marshaler/Unmarshaler are bypassed; time.Time is compressed to []")
-
 	type payload struct {
 		At time.Time `json:"at"`
 		N  int       `json:"n"`
@@ -55,6 +55,64 @@ func TestRoundTripTime(t *testing.T) {
 	}
 	if !got.At.Equal(want.At) || got.N != want.N {
 		t.Fatalf("round trip changed value: got %+v, want %+v (raw %s)", got, want, raw)
+	}
+}
+
+func TestRoundTripTimeVariants(t *testing.T) {
+	at := time.Date(2026, 10, 6, 12, 30, 0, 0, time.UTC)
+	type payload struct {
+		Ptr   *time.Time           `json:"ptr"`
+		Nil   *time.Time           `json:"nil"`
+		Slice []time.Time          `json:"slice"`
+		Map   map[string]time.Time `json:"map"`
+	}
+	want := payload{Ptr: &at, Slice: []time.Time{at}, Map: map[string]time.Time{"k": at}}
+	raw, err := Marshal(want)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	var got payload
+	if err := Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal(%s) failed: %v", raw, err)
+	}
+	if got.Ptr == nil || !got.Ptr.Equal(at) || got.Nil != nil ||
+		len(got.Slice) != 1 || !got.Slice[0].Equal(at) || !got.Map["k"].Equal(at) {
+		t.Fatalf("round trip changed value: got %+v (raw %s)", got, raw)
+	}
+}
+
+type upperString string
+
+func (s upperString) MarshalJSON() ([]byte, error) {
+	return json.Marshal(strings.ToUpper(string(s)))
+}
+
+func (s *upperString) UnmarshalJSON(data []byte) error {
+	var v string
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*s = upperString(strings.ToLower(v))
+	return nil
+}
+
+func TestCustomMarshalerIsUsed(t *testing.T) {
+	type payload struct {
+		S upperString `json:"s"`
+	}
+	raw, err := Marshal(payload{S: "abc"})
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(raw) != `["ABC"]` {
+		t.Fatalf("expected MarshalJSON output, got %s", raw)
+	}
+	var got payload
+	if err := Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if got.S != "abc" {
+		t.Fatalf("expected UnmarshalJSON to run, got %q", got.S)
 	}
 }
 

@@ -1,6 +1,7 @@
 package jsoncompressor
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,7 +18,33 @@ type structMeta struct {
 
 var (
 	typeCache sync.Map // map[reflect.Type]*structMeta
+
+	marshalerCache   sync.Map // map[reflect.Type]bool, keyed by the pointer type
+	unmarshalerCache sync.Map // map[reflect.Type]bool, keyed by the pointer type
+
+	marshalerType   = reflect.TypeFor[json.Marshaler]()
+	unmarshalerType = reflect.TypeFor[json.Unmarshaler]()
 )
+
+// implementsMarshaler reports whether an addressable value of type t
+// implements json.Marshaler, either directly or through its pointer.
+func implementsMarshaler(t reflect.Type) bool {
+	return cachedImplements(&marshalerCache, reflect.PointerTo(t), marshalerType)
+}
+
+// implementsUnmarshaler reports whether *t implements json.Unmarshaler.
+func implementsUnmarshaler(t reflect.Type) bool {
+	return cachedImplements(&unmarshalerCache, reflect.PointerTo(t), unmarshalerType)
+}
+
+func cachedImplements(cache *sync.Map, t, iface reflect.Type) bool {
+	if v, ok := cache.Load(t); ok {
+		return v.(bool)
+	}
+	ok := t.Implements(iface)
+	cache.Store(t, ok)
+	return ok
+}
 
 func getStructMeta(t reflect.Type) *structMeta {
 	for t.Kind() == reflect.Pointer {

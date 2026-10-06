@@ -89,6 +89,15 @@ func decodeIntoValue(data any, field reflect.Value) error {
 		}
 		return nil
 	}
+	if field.Kind() != reflect.Interface && field.CanAddr() && implementsUnmarshaler(field.Type()) {
+		// Types such as time.Time own their JSON form; hand the value back to
+		// their UnmarshalJSON instead of decoding it field by field.
+		raw, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		return field.Addr().Interface().(json.Unmarshaler).UnmarshalJSON(raw)
+	}
 	switch field.Kind() {
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer, reflect.Uintptr:
 		return fmt.Errorf("unsupported kind: %s", field.Kind())
