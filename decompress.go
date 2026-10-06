@@ -89,7 +89,7 @@ func decodeIntoValue(data any, field reflect.Value) error {
 		}
 		return nil
 	}
-	if field.Kind() != reflect.Interface && field.CanAddr() && implementsUnmarshaler(field.Type()) {
+	if field.CanAddr() && ownsJSON(field.Type()) {
 		// Types such as time.Time own their JSON form; hand the value back to
 		// their UnmarshalJSON instead of decoding it field by field.
 		raw, err := json.Marshal(data)

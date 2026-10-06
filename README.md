@@ -66,7 +66,7 @@ if err != nil {
 | pointer | The pointed-to value's form, or `null` when nil |
 | slice / array | Array |
 | map with string keys | Object |
-| types implementing `json.Marshaler` | Their `MarshalJSON` output |
+| types implementing `json.Marshaler` and `json.Unmarshaler` | Their `MarshalJSON` output |
 | scalars / `interface{}` | Value as-is |
 
 Channels, functions, `unsafe.Pointer`, `uintptr` and maps with non-string keys are
@@ -77,7 +77,7 @@ unsupported: `Marshal` returns an error when it meets one.
 - Only exported fields with a non-empty `json` tag take part; untagged fields and fields tagged `json:"-"` are skipped
 - Field order must be consistent between compression and decompression
 - Requires proper type matching for successful decompression
-- Types implementing `json.Marshaler` / `json.Unmarshaler` (such as `time.Time`) keep their own JSON form instead of being expanded into an array
+- Types implementing both `json.Marshaler` and `json.Unmarshaler` (such as `time.Time`) keep their own JSON form instead of being expanded into an array; embedding one in a struct promotes those methods, as with `encoding/json`
 - Integers decode exactly across the full `int64`/`uint64` range; numbers stored into `interface{}` fields decode as `float64`, as with `encoding/json`
 
 ## License

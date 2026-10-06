@@ -25,14 +25,18 @@ still `float64`, as with `encoding/json`.
 Struct values were always expanded field by field, so types that own their
 JSON form were bypassed. `time.Time`, whose fields are all unexported, was
 compressed to `[]` and decoded to the zero time without an error. Types
-implementing `json.Marshaler` are now encoded with `MarshalJSON`, and types
-whose pointer implements `json.Unmarshaler` are decoded with `UnmarshalJSON`,
-following `encoding/json`'s rules for pointer receivers.
+whose pointer implements both `json.Marshaler` and `json.Unmarshaler` are now
+encoded with `MarshalJSON` and decoded with `UnmarshalJSON`, whether or not the
+value is addressable. Types implementing only one of the two are still
+expanded field by field in both directions, so they keep round-tripping.
 
 ### Behaviour changes
 
-- The compressed output of types implementing `json.Marshaler` changes: a
+- The compressed output of types implementing both interfaces changes: a
   `time.Time` field is now its RFC 3339 string instead of `[]`. Payloads
   holding the old `[]` form for such a field now fail to decode rather than
   silently yielding a zero value.
+- As with `encoding/json`, a struct embedding such a type (for example an
+  anonymous `time.Time` field) inherits its methods and is encoded entirely by
+  them; its other fields are no longer written.
 - Trailing data after the top-level JSON value is still rejected, as before.

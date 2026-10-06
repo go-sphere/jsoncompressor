@@ -17,33 +17,28 @@ type structMeta struct {
 }
 
 var (
-	typeCache sync.Map // map[reflect.Type]*structMeta
-
-	marshalerCache   sync.Map // map[reflect.Type]bool, keyed by the pointer type
-	unmarshalerCache sync.Map // map[reflect.Type]bool, keyed by the pointer type
+	typeCache     sync.Map // map[reflect.Type]*structMeta
+	ownsJSONCache sync.Map // map[reflect.Type]bool; Implements is slow for method-rich types
 
 	marshalerType   = reflect.TypeFor[json.Marshaler]()
 	unmarshalerType = reflect.TypeFor[json.Unmarshaler]()
 )
 
-// implementsMarshaler reports whether an addressable value of type t
-// implements json.Marshaler, either directly or through its pointer.
-func implementsMarshaler(t reflect.Type) bool {
-	return cachedImplements(&marshalerCache, reflect.PointerTo(t), marshalerType)
-}
-
-// implementsUnmarshaler reports whether *t implements json.Unmarshaler.
-func implementsUnmarshaler(t reflect.Type) bool {
-	return cachedImplements(&unmarshalerCache, reflect.PointerTo(t), unmarshalerType)
-}
-
-func cachedImplements(cache *sync.Map, t, iface reflect.Type) bool {
-	if v, ok := cache.Load(t); ok {
+// ownsJSON reports whether values of type t encode and decode themselves, as
+// time.Time does: *t must implement both json.Marshaler and json.Unmarshaler.
+// Requiring both keeps Marshal and Unmarshal symmetric; a type implementing
+// only one side is still expanded field by field in both directions.
+func ownsJSON(t reflect.Type) bool {
+	if t.Kind() == reflect.Interface {
+		return false
+	}
+	if v, ok := ownsJSONCache.Load(t); ok {
 		return v.(bool)
 	}
-	ok := t.Implements(iface)
-	cache.Store(t, ok)
-	return ok
+	pt := reflect.PointerTo(t)
+	owns := pt.Implements(marshalerType) && pt.Implements(unmarshalerType)
+	ownsJSONCache.Store(t, owns)
+	return owns
 }
 
 func getStructMeta(t reflect.Type) *structMeta {

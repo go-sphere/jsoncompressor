@@ -2,6 +2,7 @@ package jsoncompressor
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -187,5 +188,54 @@ func TestDecompressRejectsTrailingData(t *testing.T) {
 	}
 	if err := Unmarshal([]byte("[1]\n"), &got); err != nil {
 		t.Fatalf("trailing whitespace should be accepted: %v", err)
+	}
+}
+
+// ptrCodec implements both methods on the pointer only.
+type ptrCodec struct{ V int }
+
+func (p *ptrCodec) MarshalJSON() ([]byte, error)    { return json.Marshal(p.V) }
+func (p *ptrCodec) UnmarshalJSON(data []byte) error { return json.Unmarshal(data, &p.V) }
+
+// decodeOnly implements only json.Unmarshaler, so it is expanded field by field.
+type decodeOnly struct {
+	V int `json:"v"`
+}
+
+func (d *decodeOnly) UnmarshalJSON([]byte) error { return errors.New("must not be called") }
+
+func TestRoundTripMarshalerSymmetry(t *testing.T) {
+	// Map values and values passed by value are not addressable; Marshal must
+	// still use the pointer-receiver MarshalJSON that Unmarshal will pair with.
+	mapWant := map[string]ptrCodec{"a": {V: 3}}
+	raw, err := Marshal(mapWant)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(raw) != `{"a":3}` {
+		t.Fatalf("expected MarshalJSON output, got %s", raw)
+	}
+	var mapGot map[string]ptrCodec
+	if err := Unmarshal(raw, &mapGot); err != nil || mapGot["a"].V != 3 {
+		t.Fatalf("Unmarshal(%s) = %+v, %v", raw, mapGot, err)
+	}
+
+	type payload struct {
+		D decodeOnly `json:"d"`
+	}
+	raw, err = Marshal(payload{D: decodeOnly{V: 5}})
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	var got payload
+	if err := Unmarshal(raw, &got); err != nil || got.D.V != 5 {
+		t.Fatalf("Unmarshal(%s) = %+v, %v", raw, got, err)
+	}
+}
+
+func TestMarshalNil(t *testing.T) {
+	raw, err := Marshal(nil)
+	if err != nil || string(raw) != "null" {
+		t.Fatalf("Marshal(nil) = %s, %v", raw, err)
 	}
 }
