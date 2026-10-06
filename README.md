@@ -76,6 +76,7 @@ unsupported: `Marshal` returns an error when it meets one.
 - Only exported fields with a non-empty `json` tag take part; untagged fields and fields tagged `json:"-"` are skipped
 - Field order must be consistent between compression and decompression
 - Requires proper type matching for successful decompression
+- Integers decode exactly across the full `int64`/`uint64` range; numbers stored into `interface{}` fields decode as `float64`, as with `encoding/json`
 
 ## License
 

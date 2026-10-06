@@ -1,10 +1,14 @@
 package jsoncompressor
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
+	"strconv"
 )
 
 func Unmarshal(data []byte, target any) error {
@@ -12,10 +16,16 @@ func Unmarshal(data []byte, target any) error {
 	if val.Kind() != reflect.Pointer || val.IsNil() {
 		return fmt.Errorf("target must be a non-nil pointer")
 	}
+	// UseNumber keeps numbers as their literal text so integers above 2^53
+	// are not rounded through float64 before reaching assignScalar.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var jsonData any
-	err := json.Unmarshal(data, &jsonData)
-	if err != nil {
+	if err := dec.Decode(&jsonData); err != nil {
 		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return fmt.Errorf("invalid data after top-level value")
 	}
 	return decodeIntoValue(jsonData, val.Elem())
 }
@@ -125,7 +135,7 @@ func decodeIntoValue(data any, field reflect.Value) error {
 		return nil
 	case reflect.Interface:
 		if field.CanSet() {
-			field.Set(reflect.ValueOf(data))
+			field.Set(reflect.ValueOf(numbersToFloat(data)))
 		}
 		return nil
 	default:
@@ -153,37 +163,41 @@ func assignScalar(field reflect.Value, data any) error {
 		field.SetBool(value)
 		return nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		value, ok := data.(float64)
+		number, ok := data.(json.Number)
 		if !ok {
 			return fmt.Errorf("expected number for %s", field.Type())
 		}
-		if math.Trunc(value) != value {
-			return fmt.Errorf("expected integer for %s", field.Type())
+		intValue, err := parseInt(number)
+		if err != nil {
+			return fmt.Errorf("%w for %s", err, field.Type())
 		}
-		intValue := int64(value)
 		if field.OverflowInt(intValue) {
 			return fmt.Errorf("integer overflow for %s", field.Type())
 		}
 		field.SetInt(intValue)
 		return nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		value, ok := data.(float64)
+		number, ok := data.(json.Number)
 		if !ok {
 			return fmt.Errorf("expected number for %s", field.Type())
 		}
-		if value < 0 || math.Trunc(value) != value {
-			return fmt.Errorf("expected unsigned integer for %s", field.Type())
+		uintValue, err := parseUint(number)
+		if err != nil {
+			return fmt.Errorf("%w for %s", err, field.Type())
 		}
-		uintValue := uint64(value)
 		if field.OverflowUint(uintValue) {
 			return fmt.Errorf("unsigned integer overflow for %s", field.Type())
 		}
 		field.SetUint(uintValue)
 		return nil
 	case reflect.Float32, reflect.Float64:
-		value, ok := data.(float64)
+		number, ok := data.(json.Number)
 		if !ok {
 			return fmt.Errorf("expected number for %s", field.Type())
+		}
+		value, err := number.Float64()
+		if err != nil {
+			return fmt.Errorf("float overflow for %s", field.Type())
 		}
 		if field.OverflowFloat(value) {
 			return fmt.Errorf("float overflow for %s", field.Type())
@@ -191,7 +205,7 @@ func assignScalar(field reflect.Value, data any) error {
 		field.SetFloat(value)
 		return nil
 	default:
-		value := reflect.ValueOf(data)
+		value := reflect.ValueOf(numbersToFloat(data))
 		if value.Type().AssignableTo(field.Type()) {
 			field.Set(value)
 			return nil
@@ -201,5 +215,80 @@ func assignScalar(field reflect.Value, data any) error {
 			return nil
 		}
 		return fmt.Errorf("unsupported assignment: %T to %s", data, field.Type())
+	}
+}
+
+// maxExactFloat is the largest magnitude below which every integer is exactly
+// representable as a float64 (2^53).
+const maxExactFloat = 1 << 53
+
+var (
+	errNotInteger         = errors.New("expected integer")
+	errNotUnsignedInteger = errors.New("expected unsigned integer")
+	errIntegerOverflow    = errors.New("integer overflow")
+)
+
+// parseInt converts a JSON number to int64 without going through float64.
+// Integral numbers written in float form (1.0, 1e3) are still accepted, but
+// only within the range where float64 is exact.
+func parseInt(number json.Number) (int64, error) {
+	value, err := strconv.ParseInt(number.String(), 10, 64)
+	if err == nil {
+		return value, nil
+	}
+	if errors.Is(err, strconv.ErrRange) {
+		return 0, errIntegerOverflow
+	}
+	f, err := strconv.ParseFloat(number.String(), 64)
+	if err != nil || math.Trunc(f) != f {
+		return 0, errNotInteger
+	}
+	if math.Abs(f) > maxExactFloat {
+		return 0, errIntegerOverflow
+	}
+	return int64(f), nil
+}
+
+// parseUint is the unsigned counterpart of parseInt.
+func parseUint(number json.Number) (uint64, error) {
+	value, err := strconv.ParseUint(number.String(), 10, 64)
+	if err == nil {
+		return value, nil
+	}
+	if errors.Is(err, strconv.ErrRange) {
+		return 0, errIntegerOverflow
+	}
+	f, err := strconv.ParseFloat(number.String(), 64)
+	if err != nil || f < 0 || math.Trunc(f) != f {
+		return 0, errNotUnsignedInteger
+	}
+	if f > maxExactFloat {
+		return 0, errIntegerOverflow
+	}
+	return uint64(f), nil
+}
+
+// numbersToFloat converts json.Number values back to float64 so values stored
+// into interface fields keep the same dynamic types encoding/json produces.
+func numbersToFloat(data any) any {
+	switch v := data.(type) {
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return v
+		}
+		return f
+	case []any:
+		for i := range v {
+			v[i] = numbersToFloat(v[i])
+		}
+		return v
+	case map[string]any:
+		for key, item := range v {
+			v[key] = numbersToFloat(item)
+		}
+		return v
+	default:
+		return data
 	}
 }
