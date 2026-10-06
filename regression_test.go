@@ -122,9 +122,13 @@ func TestDecompressIntegerForms(t *testing.T) {
 		I int64 `json:"i"`
 	}
 	ok := map[string]int64{
-		`[1.0]`:               1,
-		`[1e3]`:               1000,
-		`[-9007199254740993]`: -9007199254740993,
+		`[1.0]`:                      1,
+		`[1e3]`:                      1000,
+		`[2.5e1]`:                    25,
+		`[-0.0]`:                     0,
+		`[-9007199254740993]`:        -9007199254740993,
+		`[9007199254740993.0]`:       9007199254740993,
+		`[0.9223372036854775807e19]`: math.MaxInt64,
 	}
 	for raw, want := range ok {
 		var got payload
@@ -136,9 +140,12 @@ func TestDecompressIntegerForms(t *testing.T) {
 		}
 	}
 	bad := []string{
-		`[1.5]`,                 // not an integer
-		`[1e17]`,                // float form beyond the exact float64 range
-		`[9223372036854775808]`, // MaxInt64 + 1
+		`[1.5]`,                   // not an integer
+		`[4503599627370497.5]`,    // rounds to an integer as float64
+		`[1.0000000000000000001]`, // likewise
+		`[9223372036854775808]`,   // MaxInt64 + 1
+		`[1e19]`,                  // float form beyond int64
+		`[1e999999999999999999999]`,
 	}
 	for _, raw := range bad {
 		var got payload

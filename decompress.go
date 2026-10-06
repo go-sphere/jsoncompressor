@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"reflect"
 	"strconv"
+	"strings"
 )
 
 func Unmarshal(data []byte, target any) error {
@@ -227,10 +227,6 @@ func assignScalar(field reflect.Value, data any) error {
 	}
 }
 
-// maxExactFloat is the largest magnitude below which every integer is exactly
-// representable as a float64 (2^53).
-const maxExactFloat = 1 << 53
-
 var (
 	errNotInteger         = errors.New("expected integer")
 	errNotUnsignedInteger = errors.New("expected unsigned integer")
@@ -238,43 +234,70 @@ var (
 )
 
 // parseInt converts a JSON number to int64 without going through float64.
-// Integral numbers written in float form (1.0, 1e3) are still accepted, but
-// only within the range where float64 is exact.
 func parseInt(number json.Number) (int64, error) {
-	value, err := strconv.ParseInt(number.String(), 10, 64)
-	if err == nil {
-		return value, nil
+	text, err := integerText(number.String())
+	if err != nil {
+		return 0, err
 	}
-	if errors.Is(err, strconv.ErrRange) {
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
 		return 0, errIntegerOverflow
 	}
-	f, err := strconv.ParseFloat(number.String(), 64)
-	if err != nil || math.Trunc(f) != f {
-		return 0, errNotInteger
-	}
-	if math.Abs(f) > maxExactFloat {
-		return 0, errIntegerOverflow
-	}
-	return int64(f), nil
+	return value, nil
 }
 
 // parseUint is the unsigned counterpart of parseInt.
 func parseUint(number json.Number) (uint64, error) {
-	value, err := strconv.ParseUint(number.String(), 10, 64)
-	if err == nil {
-		return value, nil
+	text, err := integerText(number.String())
+	if err != nil {
+		return 0, err
 	}
-	if errors.Is(err, strconv.ErrRange) {
-		return 0, errIntegerOverflow
-	}
-	f, err := strconv.ParseFloat(number.String(), 64)
-	if err != nil || f < 0 || math.Trunc(f) != f {
+	if text == "-0" {
+		text = "0"
+	} else if strings.HasPrefix(text, "-") {
 		return 0, errNotUnsignedInteger
 	}
-	if f > maxExactFloat {
+	value, err := strconv.ParseUint(text, 10, 64)
+	if err != nil {
 		return 0, errIntegerOverflow
 	}
-	return uint64(f), nil
+	return value, nil
+}
+
+// integerText rewrites a JSON number literal in float form (1.0, 1e3, 25e-1)
+// as plain integer digits, working on the text so the result is exact. It
+// returns errNotInteger when the literal has a fractional part.
+func integerText(s string) (string, error) {
+	if !strings.ContainsAny(s, ".eE") {
+		return s, nil
+	}
+	sign := ""
+	if rest, ok := strings.CutPrefix(s, "-"); ok {
+		sign, s = "-", rest
+	}
+	exp := 0
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		e, err := strconv.Atoi(s[i+1:])
+		if err != nil {
+			return "", errIntegerOverflow // exponent beyond int range
+		}
+		s, exp = s[:i], e
+	}
+	intPart, frac, _ := strings.Cut(s, ".")
+	digits := strings.TrimRight(intPart+frac, "0")
+	point := len(intPart) + exp // digits[:point] is the integer part
+	trimmed := strings.TrimLeft(digits, "0")
+	point -= len(digits) - len(trimmed)
+	digits = trimmed
+	switch {
+	case digits == "":
+		return "0", nil
+	case point < len(digits):
+		return "", errNotInteger
+	case point > 20: // more digits than any 64-bit integer
+		return "", errIntegerOverflow
+	}
+	return sign + digits + strings.Repeat("0", point-len(digits)), nil
 }
 
 // numbersToFloat converts json.Number values back to float64 so values stored
