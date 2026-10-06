@@ -11,6 +11,23 @@ import (
 	"strings"
 )
 
+// Unmarshal decodes data produced by [Marshal] into target, which must be a
+// non-nil pointer to the same Go type that was marshaled.
+//
+// Each JSON array is matched to a struct's tagged, exported fields by
+// position, and its length must equal the number of such fields exactly.
+// JSON null sets the destination to its zero value (a nil pointer for pointer
+// fields). Nil pointers are allocated as needed. Slices are replaced; decoded
+// map entries are added to an existing map without clearing it. Integer
+// fields are decoded exactly from the number's text, so values above 2^53
+// keep their precision; integral literals such as 1.0 or 1e3 are accepted,
+// while fractional or out-of-range numbers are errors. Interface fields
+// receive the same dynamic types as with encoding/json (float64 for numbers).
+//
+// Unmarshal returns an error when target is not a non-nil pointer, when data
+// is not a single valid JSON value, or when the shape or types do not match.
+// The errors are not sentinels. On error, target may have been partially
+// updated.
 func Unmarshal(data []byte, target any) error {
 	val := reflect.ValueOf(target)
 	if val.Kind() != reflect.Pointer || val.IsNil() {

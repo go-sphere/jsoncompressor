@@ -6,6 +6,18 @@ import (
 	"reflect"
 )
 
+// Marshal returns the compressed JSON encoding of v: each struct is written
+// as an array of its tagged, exported field values in declaration order
+// rather than as an object. Nested structs, pointers, slices, arrays, and
+// string-keyed maps are compressed recursively; see the package
+// documentation for the full rules.
+//
+// A nil v, or a nil pointer, encodes as null. A nil slice encodes as [].
+// Marshal returns an error, and no data, when v contains a channel, function,
+// unsafe pointer, uintptr, or a map with non-string keys, or when a custom
+// MarshalJSON method or encoding/json fails. The errors are not sentinels.
+//
+// Decode the result with [Unmarshal] into the same Go type.
 func Marshal(v any) ([]byte, error) {
 	compressed, err := compressValue(reflect.ValueOf(v))
 	if err != nil {
