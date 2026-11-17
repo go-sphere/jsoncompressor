@@ -1,6 +1,7 @@
 package jsoncompressor
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"math"
@@ -244,5 +245,285 @@ func TestMarshalNil(t *testing.T) {
 	raw, err := Marshal(nil)
 	if err != nil || string(raw) != "null" {
 		t.Fatalf("Marshal(nil) = %s, %v", raw, err)
+	}
+}
+
+func TestDecompressNonEmptyInterface(t *testing.T) {
+	type payload struct {
+		Err error `json:"err"`
+	}
+	for _, raw := range []string{`["boom"]`, `[123]`, `[{}]`} {
+		var got payload
+		if err := Unmarshal([]byte(raw), &got); err == nil {
+			t.Fatalf("Unmarshal(%s) succeeded with %+v, want error", raw, got)
+		}
+	}
+
+	got := payload{Err: errors.New("stale")}
+	if err := Unmarshal([]byte(`[null]`), &got); err != nil {
+		t.Fatalf("Unmarshal([null]) failed: %v", err)
+	}
+	if got.Err != nil {
+		t.Fatalf("expected nil Err on null, got %v", got.Err)
+	}
+}
+
+func TestRoundTripRawMessageNull(t *testing.T) {
+	type payload struct {
+		Raw     json.RawMessage  `json:"raw"`
+		Payload json.RawMessage  `json:"payload"`
+		Ptr     *json.RawMessage `json:"ptr"`
+	}
+	want := payload{
+		Raw:     json.RawMessage("null"),
+		Payload: json.RawMessage(`{"k":1}`),
+		Ptr:     nil,
+	}
+	raw, err := Marshal(want)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(raw) != `[null,{"k":1},null]` {
+		t.Fatalf("unexpected compressed output: %s", raw)
+	}
+	var got payload
+	if err := Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal(%s) failed: %v", raw, err)
+	}
+	if got.Raw == nil || !bytes.Equal(got.Raw, []byte("null")) {
+		t.Fatalf("expected non-nil json.RawMessage(\"null\"), got %#v", got.Raw)
+	}
+	if !bytes.Equal(got.Payload, want.Payload) {
+		t.Fatalf("expected %s, got %s", want.Payload, got.Payload)
+	}
+	if got.Ptr != nil {
+		t.Fatalf("expected nil *json.RawMessage, got %#v", got.Ptr)
+	}
+}
+
+type OptionalInt struct {
+	Set   bool
+	Valid bool
+	Value int
+}
+
+func (o OptionalInt) MarshalJSON() ([]byte, error) {
+	if !o.Valid {
+		return []byte("null"), nil
+	}
+	return json.Marshal(o.Value)
+}
+
+func (o *OptionalInt) UnmarshalJSON(data []byte) error {
+	o.Set = true
+	if bytes.Equal(data, []byte("null")) {
+		o.Valid = false
+		o.Value = 0
+		return nil
+	}
+	o.Valid = true
+	return json.Unmarshal(data, &o.Value)
+}
+
+func TestCustomNullableValueReceivesNull(t *testing.T) {
+	type payload struct {
+		NullVal OptionalInt  `json:"null_val"`
+		SetVal  OptionalInt  `json:"set_val"`
+		Ptr     *OptionalInt `json:"ptr"`
+	}
+	in := payload{
+		NullVal: OptionalInt{Set: true, Valid: false},
+		SetVal:  OptionalInt{Set: true, Valid: true, Value: 42},
+		Ptr:     nil,
+	}
+	raw, err := Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal failed: %v", err)
+	}
+	if string(raw) != `[null,42,null]` {
+		t.Fatalf("unexpected marshaled form: %s", raw)
+	}
+
+	got := payload{
+		Ptr: &OptionalInt{Set: true, Valid: true, Value: 99},
+	}
+	if err := Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal failed: %v", err)
+	}
+	if !got.NullVal.Set || got.NullVal.Valid || got.NullVal.Value != 0 {
+		t.Fatalf("expected UnmarshalJSON(null) to mark Set=true, Valid=false; got %+v", got.NullVal)
+	}
+	if !got.SetVal.Set || !got.SetVal.Valid || got.SetVal.Value != 42 {
+		t.Fatalf("unexpected SetVal: %+v", got.SetVal)
+	}
+	if got.Ptr != nil {
+		t.Fatalf("expected nil pointer for Ptr on null, got %+v", got.Ptr)
+	}
+}
+
+func TestDecompressExtremeExponents(t *testing.T) {
+	type intPayload struct {
+		I int64 `json:"i"`
+	}
+	type uintPayload struct {
+		U uint64 `json:"u"`
+	}
+
+	var gotInt intPayload
+	if err := Unmarshal([]byte(`[1e9223372036854775807]`), &gotInt); !errors.Is(err, errIntegerOverflow) {
+		t.Fatalf("expected errIntegerOverflow for 1eMaxInt64, got %v", err)
+	}
+	if err := Unmarshal([]byte(`[0.01e-9223372036854775808]`), &gotInt); !errors.Is(err, errNotInteger) {
+		t.Fatalf("expected errNotInteger for 0.01eMinInt64, got %v", err)
+	}
+	if err := Unmarshal([]byte(`[1e-99999999999999999999999]`), &gotInt); !errors.Is(err, errNotInteger) {
+		t.Fatalf("expected errNotInteger for 1e-huge, got %v", err)
+	}
+
+	var gotUint uintPayload
+	if err := Unmarshal([]byte(`[1e9223372036854775807]`), &gotUint); !errors.Is(err, errIntegerOverflow) {
+		t.Fatalf("expected errIntegerOverflow for uint 1eMaxInt64, got %v", err)
+	}
+	if err := Unmarshal([]byte(`[0.01e-9223372036854775808]`), &gotUint); !errors.Is(err, errNotInteger) {
+		t.Fatalf("expected errNotInteger for uint 0.01eMinInt64, got %v", err)
+	}
+
+	for _, raw := range []string{`[0e9223372036854775807]`, `[0.00e-9223372036854775808]`, `[-0e999999999999999999999]`} {
+		gotInt.I = 7
+		if err := Unmarshal([]byte(raw), &gotInt); err != nil {
+			t.Fatalf("Unmarshal(%s) into int64 failed: %v", raw, err)
+		}
+		if gotInt.I != 0 {
+			t.Fatalf("Unmarshal(%s) = %d, want 0", raw, gotInt.I)
+		}
+		gotUint.U = 7
+		if err := Unmarshal([]byte(raw), &gotUint); err != nil {
+			t.Fatalf("Unmarshal(%s) into uint64 failed: %v", raw, err)
+		}
+		if gotUint.U != 0 {
+			t.Fatalf("Unmarshal(%s) = %d, want 0", raw, gotUint.U)
+		}
+	}
+}
+
+func TestDecompressInterfaceRejectsFloatOverflow(t *testing.T) {
+	var top any
+	if err := Unmarshal([]byte(`[1e1000]`), &top); err == nil {
+		t.Fatalf("expected error unmarshaling [1e1000] into any, got %#v", top)
+	}
+
+	type payload struct {
+		A any `json:"a"`
+	}
+	for _, raw := range []string{`[1e1000]`, `[[1e1000]]`, `[{"k":1e1000}]`} {
+		var got payload
+		if err := Unmarshal([]byte(raw), &got); err == nil {
+			t.Fatalf("Unmarshal(%s) succeeded with %#v, want error", raw, got)
+		}
+	}
+}
+
+func TestUnsupportedComplexKind(t *testing.T) {
+	type c64 struct {
+		V complex64 `json:"v"`
+	}
+	type c128 struct {
+		V complex128 `json:"v"`
+	}
+	if _, err := Marshal(complex(1, 2)); err == nil {
+		t.Fatalf("expected Marshal error for complex128")
+	}
+	if _, err := Marshal(c64{V: complex(1, 2)}); err == nil {
+		t.Fatalf("expected Marshal error for complex64 struct field")
+	}
+	var out64 c64
+	if err := Unmarshal([]byte(`[1]`), &out64); err == nil {
+		t.Fatalf("expected Unmarshal error for complex64")
+	}
+	var out128 c128
+	if err := Unmarshal([]byte(`[1]`), &out128); err == nil {
+		t.Fatalf("expected Unmarshal error for complex128")
+	}
+}
+
+func TestMarshalCyclesAndDepth(t *testing.T) {
+	type node struct {
+		Next *node `json:"next"`
+	}
+	// Direct pointer cycle
+	a := &node{}
+	a.Next = a
+	if _, err := Marshal(a); err == nil {
+		t.Fatalf("expected error on self-referential pointer")
+	}
+
+	// Mutual pointer cycle
+	b := &node{}
+	a.Next = b
+	b.Next = a
+	if _, err := Marshal(a); err == nil {
+		t.Fatalf("expected error on mutual pointer cycle")
+	}
+
+	// Pure pointer-to-pointer cycle
+	type selfPtr *selfPtr
+	var sp selfPtr
+	sp = &sp
+	if _, err := Marshal(sp); err == nil {
+		t.Fatalf("expected error on pointer-to-self cycle")
+	}
+
+	// Cyclic slice and map
+	type recSlice []recSlice
+	rs := make(recSlice, 1)
+	rs[0] = rs
+	if _, err := Marshal(rs); err == nil {
+		t.Fatalf("expected error on cyclic slice")
+	}
+	type recMap map[string]recMap
+	rm := recMap{}
+	rm["self"] = rm
+	if _, err := Marshal(rm); err == nil {
+		t.Fatalf("expected error on cyclic map")
+	}
+
+	// Deep non-cyclic chain exceeding maxDepth
+	head := &node{}
+	cur := head
+	for range maxDepth + 1 {
+		next := &node{}
+		cur.Next = next
+		cur = next
+	}
+	if _, err := Marshal(head); err == nil {
+		t.Fatalf("expected error when depth exceeds maxDepth")
+	}
+
+	// Shared non-cyclic pointer (DAG) must still succeed
+	leaf := &node{}
+	raw, err := Marshal([2]*node{leaf, leaf})
+	if err != nil {
+		t.Fatalf("shared non-cyclic pointer failed: %v", err)
+	}
+	if string(raw) != `[[null],[null]]` {
+		t.Fatalf("unexpected shared pointer output: %s", raw)
+	}
+
+	// Pointer to offset-0 field inside outer struct must not trigger a false cycle
+	type inner struct {
+		X int `json:"x"`
+	}
+	type outer struct {
+		First inner  `json:"first"`
+		Ptr   *inner `json:"ptr"`
+	}
+	o := &outer{First: inner{X: 1}}
+	o.Ptr = &o.First
+	raw, err = Marshal(o)
+	if err != nil {
+		t.Fatalf("pointer to offset-0 field failed: %v", err)
+	}
+	if string(raw) != `[[1],[1]]` {
+		t.Fatalf("unexpected offset-0 pointer output: %s", raw)
 	}
 }

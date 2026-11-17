@@ -139,3 +139,8 @@ fabric.properties
 
 # End of https://www.toptal.com/developers/gitignore/api/goland,go
 
+.DS_Store
+.claude
+.gocache
+/code_review
+

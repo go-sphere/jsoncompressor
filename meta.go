@@ -7,13 +7,8 @@ import (
 	"sync"
 )
 
-type fieldMeta struct {
-	index    int
-	jsonName string
-}
-
 type structMeta struct {
-	fields []fieldMeta // ordered, only exported fields with json tag (not "-")
+	fields []int // ordered indices of exported fields with json tag (not "-")
 }
 
 var (
@@ -53,14 +48,13 @@ func getStructMeta(t reflect.Type) *structMeta {
 	}
 	// Build metadata
 	num := t.NumField()
-	fields := make([]fieldMeta, 0, num)
+	fields := make([]int, 0, num)
 	for i := range num {
 		ft := t.Field(i)
-		name, ok := getJsonKey(&ft)
-		if !ok {
+		if _, ok := getJsonKey(&ft); !ok {
 			continue
 		}
-		fields = append(fields, fieldMeta{index: i, jsonName: name})
+		fields = append(fields, i)
 	}
 	m := &structMeta{fields: fields}
 	if existing, loaded := typeCache.LoadOrStore(t, m); loaded {
@@ -77,7 +71,7 @@ func getJsonKey(field *reflect.StructField) (string, bool) {
 	if tag == "-" || tag == "" {
 		return "", false
 	}
-	name := strings.Split(tag, ",")[0]
+	name, _, _ := strings.Cut(tag, ",")
 	if name == "" {
 		name = field.Name
 	}

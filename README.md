@@ -69,7 +69,7 @@ if err != nil {
 | types implementing `json.Marshaler` and `json.Unmarshaler` | Their `MarshalJSON` output |
 | scalars / `interface{}` | Value as-is |
 
-Channels, functions, `unsafe.Pointer`, `uintptr` and maps with non-string keys are
+Channels, functions, `unsafe.Pointer`, `uintptr`, complex numbers and maps with non-string keys are
 unsupported: `Marshal` returns an error when it meets one.
 
 ## Notes

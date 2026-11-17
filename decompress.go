@@ -17,12 +17,14 @@ import (
 // Each JSON array is matched to a struct's tagged, exported fields by
 // position, and its length must equal the number of such fields exactly.
 // JSON null sets the destination to its zero value (a nil pointer for pointer
-// fields). Nil pointers are allocated as needed. Slices are replaced; decoded
-// map entries are added to an existing map without clearing it. Integer
-// fields are decoded exactly from the number's text, so values above 2^53
-// keep their precision; integral literals such as 1.0 or 1e3 are accepted,
-// while fractional or out-of-range numbers are errors. Interface fields
-// receive the same dynamic types as with encoding/json (float64 for numbers).
+// fields), or passes null to UnmarshalJSON for non-pointer types that implement
+// both json.Marshaler and json.Unmarshaler. Nil pointers are allocated as
+// needed. Slices are replaced; decoded map entries are added to an existing map
+// without clearing it. Integer fields are decoded exactly from the number's
+// text, so values above 2^53 keep their precision; integral literals such as
+// 1.0 or 1e3 are accepted, while fractional or out-of-range numbers are errors.
+// Interface fields receive the same dynamic types as with encoding/json (float64
+// for numbers).
 //
 // Unmarshal returns an error when target is not a non-nil pointer, when data
 // is not a single valid JSON value, or when the shape or types do not match.
@@ -58,8 +60,8 @@ func decodeIntoStruct(data []any, val reflect.Value) error {
 	if len(data) != len(meta.fields) {
 		return fmt.Errorf("field count mismatch: have %d values, want %d", len(data), len(meta.fields))
 	}
-	for i, f := range meta.fields {
-		field := val.Field(f.index)
+	for i, idx := range meta.fields {
+		field := val.Field(idx)
 		if err := decodeIntoValue(data[i], field); err != nil {
 			return err
 		}
@@ -100,23 +102,30 @@ func decodeIntoValue(data any, field reflect.Value) error {
 		}
 		return decodeIntoValue(data, field.Elem())
 	}
+	if field.CanAddr() && ownsJSON(field.Type()) {
+		// Types such as time.Time own their JSON form; hand the value back to
+		// their UnmarshalJSON instead of decoding it field by field, including
+		// JSON null so wrappers and json.RawMessage handle null themselves.
+		var raw []byte
+		if data == nil {
+			raw = []byte("null")
+		} else {
+			var err error
+			raw, err = json.Marshal(data)
+			if err != nil {
+				return err
+			}
+		}
+		return field.Addr().Interface().(json.Unmarshaler).UnmarshalJSON(raw)
+	}
 	if data == nil {
 		if field.CanSet() {
 			field.Set(reflect.Zero(field.Type()))
 		}
 		return nil
 	}
-	if field.CanAddr() && ownsJSON(field.Type()) {
-		// Types such as time.Time own their JSON form; hand the value back to
-		// their UnmarshalJSON instead of decoding it field by field.
-		raw, err := json.Marshal(data)
-		if err != nil {
-			return err
-		}
-		return field.Addr().Interface().(json.Unmarshaler).UnmarshalJSON(raw)
-	}
 	switch field.Kind() {
-	case reflect.Chan, reflect.Func, reflect.UnsafePointer, reflect.Uintptr:
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer, reflect.Uintptr, reflect.Complex64, reflect.Complex128:
 		return fmt.Errorf("unsupported kind: %s", field.Kind())
 	case reflect.Map:
 		dataMap, ok := data.(map[string]any)
@@ -160,9 +169,22 @@ func decodeIntoValue(data any, field reflect.Value) error {
 		}
 		return nil
 	case reflect.Interface:
-		if field.CanSet() {
-			field.Set(reflect.ValueOf(numbersToFloat(data)))
+		if !field.CanSet() {
+			return fmt.Errorf("cannot set value of type %s", field.Type())
 		}
+		val, err := numbersToFloat(data)
+		if err != nil {
+			return err
+		}
+		if val == nil {
+			field.SetZero()
+			return nil
+		}
+		rv := reflect.ValueOf(val)
+		if !rv.Type().AssignableTo(field.Type()) {
+			return fmt.Errorf("cannot unmarshal %T into %s", val, field.Type())
+		}
+		field.Set(rv)
 		return nil
 	default:
 		return assignScalar(field, data)
@@ -231,7 +253,15 @@ func assignScalar(field reflect.Value, data any) error {
 		field.SetFloat(value)
 		return nil
 	default:
-		value := reflect.ValueOf(numbersToFloat(data))
+		converted, err := numbersToFloat(data)
+		if err != nil {
+			return err
+		}
+		if converted == nil {
+			field.SetZero()
+			return nil
+		}
+		value := reflect.ValueOf(converted)
 		if value.Type().AssignableTo(field.Type()) {
 			field.Set(value)
 			return nil
@@ -292,23 +322,36 @@ func integerText(s string) (string, error) {
 	if rest, ok := strings.CutPrefix(s, "-"); ok {
 		sign, s = "-", rest
 	}
-	exp := 0
+	expStr := ""
 	if i := strings.IndexAny(s, "eE"); i >= 0 {
-		e, err := strconv.Atoi(s[i+1:])
-		if err != nil {
-			return "", errIntegerOverflow // exponent beyond int range
-		}
-		s, exp = s[:i], e
+		s, expStr = s[:i], s[i+1:]
 	}
 	intPart, frac, _ := strings.Cut(s, ".")
-	digits := strings.TrimRight(intPart+frac, "0")
-	point := len(intPart) + exp // digits[:point] is the integer part
-	trimmed := strings.TrimLeft(digits, "0")
-	point -= len(digits) - len(trimmed)
-	digits = trimmed
-	switch {
-	case digits == "":
+	rawDigits := strings.TrimRight(intPart+frac, "0")
+	digits := strings.TrimLeft(rawDigits, "0")
+	if digits == "" {
 		return "0", nil
+	}
+	exp := 0
+	if expStr != "" {
+		e, err := strconv.Atoi(expStr)
+		if err != nil {
+			if errors.Is(err, strconv.ErrRange) && strings.HasPrefix(expStr, "-") {
+				return "", errNotInteger
+			}
+			return "", errIntegerOverflow // exponent beyond int range
+		}
+		exp = e
+	}
+	// Bound exp before adding len(intPart) so extreme exponents cannot overflow int.
+	if exp > 20 && exp-20 > len(frac) {
+		return "", errIntegerOverflow
+	}
+	if exp < -len(intPart) {
+		return "", errNotInteger
+	}
+	point := len(intPart) + exp - (len(rawDigits) - len(digits)) // digits[:point] is the integer part
+	switch {
 	case point < len(digits):
 		return "", errNotInteger
 	case point > 20: // more digits than any 64-bit integer
@@ -319,25 +362,33 @@ func integerText(s string) (string, error) {
 
 // numbersToFloat converts json.Number values back to float64 so values stored
 // into interface fields keep the same dynamic types encoding/json produces.
-func numbersToFloat(data any) any {
+func numbersToFloat(data any) (any, error) {
 	switch v := data.(type) {
 	case json.Number:
 		f, err := v.Float64()
 		if err != nil {
-			return v
+			return nil, err
 		}
-		return f
+		return f, nil
 	case []any:
 		for i := range v {
-			v[i] = numbersToFloat(v[i])
+			converted, err := numbersToFloat(v[i])
+			if err != nil {
+				return nil, err
+			}
+			v[i] = converted
 		}
-		return v
+		return v, nil
 	case map[string]any:
 		for key, item := range v {
-			v[key] = numbersToFloat(item)
+			converted, err := numbersToFloat(item)
+			if err != nil {
+				return nil, err
+			}
+			v[key] = converted
 		}
-		return v
+		return v, nil
 	default:
-		return data
+		return data, nil
 	}
 }

@@ -40,8 +40,9 @@
 //   - Other values, including values held in interface fields, are encoded
 //     by encoding/json unchanged; structs inside an interface are therefore
 //     written as ordinary JSON objects.
-//   - Channels, functions, unsafe pointers, uintptr values, and maps with
-//     non-string keys are rejected with an error.
+//   - Channels, functions, unsafe pointers, uintptr values, complex numbers,
+//     cyclic structures, and maps with non-string keys are rejected with an
+//     error.
 //
 // Marshal and Unmarshal cache per-type metadata internally and are safe for
 // concurrent use.
