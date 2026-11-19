@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.0.5 (2026-11-19)
+
 Two silent data-corruption fixes. Payloads written by earlier versions still
 decode: the compressed wire format for numbers is unchanged.
 
